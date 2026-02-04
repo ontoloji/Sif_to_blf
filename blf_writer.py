@@ -56,6 +56,16 @@ class BLFWriter:
         }
         self.objects.append(obj)
     
+    def add_env_double(self, name: str, value: float, timestamp_ns: int):
+        """Add an environment variable (double) - for signal values"""
+        obj = {
+            'type': BLFObjectType.ENV_DOUBLE,
+            'name': name,
+            'value': value,
+            'timestamp': timestamp_ns
+        }
+        self.objects.append(obj)
+    
     def add_can_fd_message(self, channel: int, can_id: int, data: bytes,
                           timestamp_ns: int, flags: int = 0, fd_flags: int = 0):
         """Add a CAN FD message"""
@@ -136,6 +146,8 @@ class BLFWriter:
             self._write_can_message2(f, obj)
         elif obj_type == BLFObjectType.CAN_FD_MESSAGE_64:
             self._write_can_fd_message64(f, obj)
+        elif obj_type == BLFObjectType.ENV_DOUBLE:
+            self._write_env_double(f, obj)
     
     def _write_can_message2(self, f, obj: dict):
         """Write CAN_MESSAGE2 object"""
@@ -205,3 +217,32 @@ class BLFWriter:
         
         # Data
         f.write(data.ljust(data_size, b'\x00'))
+    
+    def _write_env_double(self, f, obj: dict):
+        """Write ENV_DOUBLE object for signal values"""
+        name_bytes = obj['name'].encode('utf-8')
+        name_len = len(name_bytes)
+        obj_type = obj['type']
+        
+        # Calculate object size (must be multiple of 4)
+        base_size = 32
+        name_size = ((name_len + 1 + 3) // 4) * 4  # +1 for null terminator
+        obj_size = base_size + name_size
+        
+        # Object header
+        f.write(struct.pack('<I', obj_size))
+        f.write(struct.pack('<I', 0))
+        f.write(struct.pack('<H', obj_type))
+        f.write(struct.pack('<H', 0))  # flags
+        f.write(struct.pack('<H', 0))  # reserved
+        f.write(struct.pack('<H', 1))  # version
+        f.write(struct.pack('<Q', obj['timestamp']))
+        
+        # ENV_DOUBLE specific
+        f.write(struct.pack('<d', obj['value']))  # double value (8 bytes)
+        f.write(struct.pack('<I', name_len + 1))  # name length with null
+        
+        # Name string (null-terminated, padded)
+        name_padded = name_bytes + b'\x00'
+        name_padded = name_padded.ljust(name_size, b'\x00')
+        f.write(name_padded)
