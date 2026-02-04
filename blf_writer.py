@@ -141,6 +141,7 @@ class BLFWriter:
         """Write CAN_MESSAGE2 object"""
         data = obj['data']
         dlc = obj['dlc']
+        obj_type = obj['type']
         
         # Calculate object size (must be multiple of 4)
         base_size = 48  # Base structure size
@@ -175,6 +176,7 @@ class BLFWriter:
         """Write CAN_FD_MESSAGE_64 object"""
         data = obj['data']
         dlc = obj['dlc']
+        obj_type = obj['type']
         
         # Calculate object size
         base_size = 80
