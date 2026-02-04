@@ -166,7 +166,7 @@ def _map_channels_to_signals(self, channels: List[Channel]) -> Dict[str, tuple]:
         return mapping
     
 def _write_can_message(self, writer: BLFWriter, msg_id: int, 
-                          signal_values: Dict[str, float], timestamp_ns: int):
+                              signal_values: Dict[str, float], timestamp_ns: int):
         """Encode signals and write CAN message"""
         # Find which DBC contains this message
         for db_name, dbc in self.dbc_databases.items():
@@ -189,7 +189,7 @@ def _write_can_message(self, writer: BLFWriter, msg_id: int,
                 break
     
 def _extract_sample_data(self, binary_data: bytes, sample_index: int,
-                            channels: List[Channel]) -> Dict[Channel, float]:
+                                channels: List[Channel]) -> Dict[Channel, float]:
         """Extract sample data from binary (placeholder - needs real decoding)"""  
         sample_data = {}
         
@@ -258,7 +258,6 @@ def main():
             import traceback
             traceback.print_exc()
         sys.exit(1)
-
 
 if __name__ == '__main__':
     main()
