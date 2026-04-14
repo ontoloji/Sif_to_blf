@@ -33,6 +33,9 @@ class Channel:
     cal_intercept: float
     connector: str
     prefix: str
+    chan_data_type: int = 0
+    vb_sig_data_type: int = 0
+    vb_sig_data_offset: int = 0
 
 
 @dataclass
@@ -49,6 +52,8 @@ class SIFData:
 
 class SIFParser:
     """Parser for Somat SIF files""" 
+
+    _FLOAT_PATTERN = r'([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)'
     
     def __init__(self, filepath: str):
         self.filepath = filepath
@@ -169,12 +174,15 @@ class SIFParser:
                 type_match = re.search(r'Type_1=(\w+)', section)
                 units_match = re.search(r'Units_1=([^\n]+)', section)
                 rate_match = re.search(r'SampleRate=(\d+)', section)
-                min_match = re.search(r'FS_Min_1=([-+]?:\d*\.?\d+(?:[eE][-+]?:\d+)?)', section)
-                max_match = re.search(r'FS_Max_1=([-+]?:\d*\.?\d+(?:[eE][-+]?:\d+)?)', section)
-                slope_match = re.search(r'CalSlope=([-+]?:\d*\.?\d+(?:[eE][-+]?:\d+)?)', section)
-                intercept_match = re.search(r'CalIntercept=([-+]?:\d*\.?\d+(?:[eE][-+]?:\d+)?)', section)
+                min_match = re.search(rf'FS_Min_1={self._FLOAT_PATTERN}', section)
+                max_match = re.search(rf'FS_Max_1={self._FLOAT_PATTERN}', section)
+                slope_match = re.search(rf'CalSlope={self._FLOAT_PATTERN}', section)
+                intercept_match = re.search(rf'CalIntercept={self._FLOAT_PATTERN}', section)
                 connector_match = re.search(r'Connector=([^\n]+)', section)
                 prefix_match = re.search(r'Prefix=([^\n]+)', section)
+                chan_data_type_match = re.search(r'ChanDataType=(\d+)', section)
+                vb_sig_data_type_match = re.search(r'VB_SigDataType=(\d+)', section)
+                vb_sig_data_offset_match = re.search(r'VB_SigDataOffset=(\d+)', section)
                 
                 if id_match:
                     channels.append(Channel(
@@ -187,7 +195,10 @@ class SIFParser:
                         cal_slope=float(slope_match.group(1)) if slope_match else 1.0,
                         cal_intercept=float(intercept_match.group(1)) if intercept_match else 0.0,
                         connector=connector_match.group(1).strip() if connector_match else '',
-                        prefix=prefix_match.group(1).strip() if prefix_match else ''
+                        prefix=prefix_match.group(1).strip() if prefix_match else '',
+                        chan_data_type=int(chan_data_type_match.group(1)) if chan_data_type_match else 0,
+                        vb_sig_data_type=int(vb_sig_data_type_match.group(1)) if vb_sig_data_type_match else 0,
+                        vb_sig_data_offset=int(vb_sig_data_offset_match.group(1)) if vb_sig_data_offset_match else 0
                     ))
             except Exception as e:
                 print(f"Warning: Could not parse channel: {e}")

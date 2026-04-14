@@ -1,7 +1,1 @@
-# No external dependencies required for basic functionality
-# All using Python standard library
-
-# For development/testing:
-# pytest>=7.0.0
-# black>=23.0.0
-# flake8>=6.0.0
+python-can>=4.2.0
