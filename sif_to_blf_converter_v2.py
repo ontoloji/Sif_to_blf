@@ -4,7 +4,9 @@ Converts Somat eDAQ SIF files to Vector BLF format with DBC support
 """
 
 import argparse
+import difflib
 import glob
+import re
 import struct
 import sys
 from pathlib import Path
@@ -141,40 +143,218 @@ class SIFToBLFConverterV2:
     def _map_channels_to_signals(
         self, channels: List[Channel]
     ) -> Dict[str, Optional[Tuple[str, int, str]]]:
-        """Map SIF channels to DBC signals"""
+        """Map SIF channels to DBC signals using semantic similarity."""
         mapping: Dict[str, Optional[Tuple[str, int, str]]] = {}
+        candidates = self._build_signal_candidates()
 
         for channel in channels:
-            found = False
-
-            for db_name, dbc in self.dbc_databases.items():
-                if channel.name in dbc.signal_to_message:
-                    msg_id = dbc.signal_to_message[channel.name]
-                    mapping[channel.name] = (db_name, msg_id, channel.name)
-                    found = True
-                    break
-
-                name_variants = [
-                    channel.name,
-                    channel.name.replace("_", ""),
-                    channel.name.upper(),
-                    channel.name.lower(),
-                ]
-
-                for variant in name_variants:
-                    if variant in dbc.signal_to_message:
-                        msg_id = dbc.signal_to_message[variant]
-                        mapping[channel.name] = (db_name, msg_id, variant)
-                        found = True
-                        break
-
-                if found:
-                    break
-
-            if not found:
+            best = self._best_signal_candidate(channel, candidates)
+            if best is None:
                 mapping[channel.name] = None
+                continue
+
+            db_name, msg_id, signal_name, score = best
+            mapping[channel.name] = (db_name, msg_id, signal_name) if score >= 0.70 else None
 
         return mapping
+
+    def _build_signal_candidates(self) -> List[Tuple[str, int, str, str, str, str]]:
+        """Flatten all loaded DBC signals into a comparable candidate list."""
+        candidates: List[Tuple[str, int, str, str, str, str]] = []
+
+        for db_name, dbc in self.dbc_databases.items():
+            for msg_id, message in dbc.messages.items():
+                for signal_name, signal in message.signals.items():
+                    candidates.append(
+                        (
+                            db_name,
+                            msg_id,
+                            signal_name,
+                            signal.description,
+                            signal.unit,
+                            message.description,
+                        )
+                    )
+
+        return candidates
+
+    def _best_signal_candidate(
+        self,
+        channel: Channel,
+        candidates: List[Tuple[str, int, str, str, str, str]],
+    ) -> Optional[Tuple[str, int, str, float]]:
+        """Return the best DBC signal candidate for a channel."""
+        best: Optional[Tuple[str, int, str, float]] = None
+        channel_name_norm = self._normalize_name(channel.name)
+        channel_tokens = self._tokenize_name(channel.name)
+        channel_context = self._normalize_name(f"{channel.name} {channel.prefix} {channel.channel_type} {channel.units}")
+
+        for db_name, msg_id, signal_name, signal_description, signal_unit, message_description in candidates:
+            signal_name_norm = self._normalize_name(signal_name)
+            signal_context = self._normalize_name(f"{signal_name} {signal_description} {message_description}")
+
+            name_score = self._string_similarity(channel_name_norm, signal_name_norm)
+            token_score = self._token_similarity_score(
+                channel_tokens,
+                self._tokenize_name(f"{signal_name} {signal_description} {message_description}"),
+            )
+            desc_score = self._string_similarity(channel_context, signal_context)
+            unit_score = self._unit_similarity(channel.units, signal_unit, signal_description, message_description)
+            type_score = self._type_similarity(
+                channel.channel_type,
+                signal_name,
+                signal_description,
+                message_description,
+                signal_unit,
+            )
+
+            score = (
+                name_score * 0.40
+                + token_score * 0.30
+                + desc_score * 0.15
+                + unit_score * 0.10
+                + type_score * 0.05
+            )
+
+            if best is None or score > best[3]:
+                best = (db_name, msg_id, signal_name, score)
+
+        return best
+
+    def _normalize_name(self, name: str) -> str:
+        """Normalize names for loose matching: lowercase and alnum only."""
+        return re.sub(r"[^a-z0-9]", "", name.lower())
+
+    def _string_similarity(self, left: str, right: str) -> float:
+        """Compare two normalized strings, rewarding exact and partial matches."""
+        if not left or not right:
+            return 0.0
+
+        if left == right:
+            return 1.0
+
+        if left in right or right in left:
+            shorter = min(len(left), len(right))
+            longer = max(len(left), len(right))
+            return 0.85 + (shorter / max(1, longer)) * 0.1
+
+        return difflib.SequenceMatcher(None, left, right).ratio()
+
+    def _tokenize_name(self, name: str) -> List[str]:
+        """Tokenize snake/camel names into lowercase semantic pieces."""
+        parts = re.split(r"[^A-Za-z0-9]+", name)
+        tokens: List[str] = []
+        for part in parts:
+            if not part:
+                continue
+            # Split CamelCase and acronym transitions.
+            chunks = re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+", part)
+            if chunks:
+                tokens.extend(c.lower() for c in chunks if c)
+            else:
+                tokens.append(part.lower())
+        return tokens
+
+    def _best_fuzzy_signal_match(
+        self,
+        channel_name: str,
+        channel_norm: str,
+        channel_tokens: List[str],
+        signal_names: List[str],
+    ) -> Tuple[Optional[str], float]:
+        """Return best signal candidate and confidence score."""
+        best_signal: Optional[str] = None
+        best_score = 0.0
+
+        for signal_name in signal_names:
+            signal_norm = self._normalize_name(signal_name)
+            signal_tokens = self._tokenize_name(signal_name)
+
+            seq_score = difflib.SequenceMatcher(None, channel_norm, signal_norm).ratio()
+            token_score = self._token_similarity_score(channel_tokens, signal_tokens)
+            score = (seq_score * 0.35) + (token_score * 0.65)
+
+            if score > best_score:
+                best_score = score
+                best_signal = signal_name
+
+        return best_signal, best_score
+
+    def _token_similarity_score(self, left: List[str], right: List[str]) -> float:
+        """Greedy token-level similarity for abbreviated names (0..1)."""
+        if not left or not right:
+            return 0.0
+
+        remaining = right.copy()
+        total = 0.0
+
+        for token in left:
+            best = 0.0
+            best_idx = -1
+            for idx, candidate in enumerate(remaining):
+                sim = self._token_similarity(token, candidate)
+                if sim > best:
+                    best = sim
+                    best_idx = idx
+
+            if best_idx >= 0:
+                remaining.pop(best_idx)
+            total += best
+
+        return total / max(1, len(left))
+
+    def _unit_similarity(self, channel_unit: str, signal_unit: str, signal_description: str, message_description: str) -> float:
+        """Heuristic unit and description compatibility score."""
+        if not channel_unit:
+            return 0.0
+
+        channel_norm = self._normalize_name(channel_unit)
+        signal_norm = self._normalize_name(signal_unit)
+        if channel_norm and signal_norm and channel_norm == signal_norm:
+            return 1.0
+
+        if channel_norm and signal_norm and (channel_norm in signal_norm or signal_norm in channel_norm):
+            return 0.85
+
+        description_tokens = self._tokenize_name(f"{signal_description} {message_description} {signal_unit}")
+        return self._token_similarity_score(self._tokenize_name(channel_unit), description_tokens)
+
+    def _type_similarity(
+        self,
+        channel_type: str,
+        signal_name: str,
+        signal_description: str,
+        message_description: str,
+        signal_unit: str,
+    ) -> float:
+        """Use channel type and signal text to boost semantically consistent matches."""
+        channel_tokens = self._tokenize_name(channel_type)
+        if not channel_tokens:
+            return 0.0
+
+        signal_tokens = self._tokenize_name(f"{signal_name} {signal_description} {message_description} {signal_unit}")
+        return self._token_similarity_score(channel_tokens, signal_tokens)
+
+    def _token_similarity(self, left: str, right: str) -> float:
+        """Similarity between two tokens with abbreviation heuristics."""
+        if left == right:
+            return 1.0
+
+        if len(left) >= 2 and len(right) >= 2 and (left.startswith(right) or right.startswith(left)):
+            return 0.9
+
+        if self._is_subsequence(left, right) or self._is_subsequence(right, left):
+            return 0.75
+
+        return difflib.SequenceMatcher(None, left, right).ratio() * 0.6
+
+    def _is_subsequence(self, small: str, large: str) -> bool:
+        """True if every character in small appears in large in order."""
+        if len(small) > len(large):
+            return False
+
+        it = iter(large)
+        return all(char in it for char in small)
 
     def _write_can_message(
         self,

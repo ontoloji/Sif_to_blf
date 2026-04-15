@@ -19,6 +19,7 @@ class ByteOrder(Enum):
 class Signal:
     """CAN Signal definition"""
     name: str
+    description: str
     start_bit: int
     length: int
     byte_order: ByteOrder
@@ -54,6 +55,7 @@ class Message:
     """CAN Message definition"""
     can_id: int
     name: str
+    description: str
     dlc: int
     sender: str
     signals: Dict[str, Signal]
@@ -136,6 +138,9 @@ class DBCParser:
         
         # Parse signals
         self._parse_signals(content)
+
+        # Parse signal and message comments
+        self._parse_comments(content)
         
         # Parse value tables (optional)
         self._parse_value_tables(content)
@@ -156,6 +161,7 @@ class DBCParser:
             self.messages[can_id] = Message(
                 can_id=can_id,
                 name=name,
+                description="",
                 dlc=dlc,
                 sender=sender,
                 signals={}
@@ -193,6 +199,7 @@ class DBCParser:
                 
                 signal = Signal(
                     name=name,
+                    description="",
                     start_bit=start_bit,
                     length=length,
                     byte_order=byte_order,
@@ -208,6 +215,26 @@ class DBCParser:
                 if current_message_id in self.messages:
                     self.messages[current_message_id].signals[name] = signal
                     self.signal_to_message[name] = current_message_id
+
+    def _parse_comments(self, content: str):
+        """Parse DBC comments for messages and signals (CM_ lines)."""
+        signal_comment_pattern = r'CM_\s+SG_\s+(\d+)\s+(\w+)\s+"([^"]*)"\s*;'
+        message_comment_pattern = r'CM_\s+BO_\s+(\d+)\s+"([^"]*)"\s*;'
+
+        for match in re.finditer(message_comment_pattern, content, re.DOTALL):
+            can_id = int(match.group(1))
+            description = match.group(2).strip()
+            message = self.messages.get(can_id)
+            if message:
+                message.description = description
+
+        for match in re.finditer(signal_comment_pattern, content, re.DOTALL):
+            can_id = int(match.group(1))
+            signal_name = match.group(2)
+            description = match.group(3).strip()
+            message = self.messages.get(can_id)
+            if message and signal_name in message.signals:
+                message.signals[signal_name].description = description
     
     def _parse_value_tables(self, content: str):
         """Parse value tables (VAL_ lines) - optional for enums"""
